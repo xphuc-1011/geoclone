@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Geometry Dash — Remaster</title>
+  <style>
+    :root{--bg:#0b0b12;--panel:#0f1720;--accent:#06f0d8;--danger:#ff4d6d}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
+    body{background:linear-gradient(180deg,#05050a 0%, #0a0b10 100%);display:flex;align-items:center;justify-content:center}
+    #container{width:100%;max-width:1100px;margin:20px;padding:16px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border-radius:12px;box-shadow:0 8px 30px rgba(2,6,23,0.6)}
+    header{display:flex;align-items:center;justify-content:space-between;color:#cbd5e1;padding:8px 4px}
+    header h1{font-size:18px;margin:0}
+    #hud{display:flex;gap:12px;align-items:center}
+    .chip{background:var(--panel);padding:8px 12px;border-radius:999px;font-weight:600}
+    #game{display:block;width:100%;height:520px;border-radius:8px;background:linear-gradient(180deg,#10141a,#061018)}
+    #controls{display:flex;gap:10px;margin-top:10px;justify-content:center}
+    button{background:var(--panel);border:0;padding:10px 14px;border-radius:8px;color:#e6eef8;font-weight:700;cursor:pointer}
+    button:active{transform:translateY(1px)}
+    #mobile-controls{position:fixed;left:50%;transform:translateX(-50%);bottom:28px;display:none;gap:12px}
+    .touch{width:80px;height:80px;border-radius:999px;background:rgba(255,255,255,0.04);display:flex;align-items:center;justify-content:center;color:#e6eef8;font-weight:800}
+    @media (max-width:900px){#game{height:60vh} #mobile-controls{display:flex}}
+    small.note{color:#94a3b8}
+  </style>
+</head>
+<body>
+  <div id="container">
+    <header>
+      <h1>Geometry Dash — Remaster</h1>
+      <div id="hud">
+        <div class="chip">Score: <span id="score">0</span></div>
+        <div class="chip">Highscore: <span id="highscore">0</span></div>
+        <div class="chip">Speed: <span id="speed">6</span></div>
+      </div>
+    </header>
+
+    <canvas id="game" width="1024" height="520"></canvas>
+
+    <div id="controls">
+      <button id="startBtn">Start</button>
+      <button id="pauseBtn">Pause</button>
+      <button id="restartBtn">Restart</button>
+      <button id="muteBtn">Mute</button>
+      <small class="note">Tip: Space / Tap to jump. Hold for higher jump. Coyote time enabled.</small>
+    </div>
+  </div>
+
+  <div id="mobile-controls">
+    <div class="touch" id="touch-left">◀</div>
+    <div class="touch" id="touch-jump">JUMP</div>
+    <div class="touch" id="touch-right">▶</div>
+  </div>
+
+  <script>
+    // ======================================================
+    // Geometry Dash — Remaster (single file)
+    // Features:
+    // - Responsive canvas and scaling
+    // - Smooth physics (coyote time, variable jump)
+    // - Procedural obstacles with increasing difficulty
+    // - Parallax background, particle effects
+    // - Score, highscore (localStorage)
+    // - Pause / restart / mobile touch / simple sound FX (WebAudio)
+    // ======================================================
+
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    // Responsive size (internal resolution independent of CSS size)
+    function fitCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.max(800, Math.floor(rect.width * devicePixelRatio));
+      canvas.height = Math.max(400, Math.floor(rect.height * devicePixelRatio));
+      ctx.imageSmoothingEnabled = true;
+    }
+    window.addEventListener('resize', fitCanvas);
+    fitCanvas();
+
+    // Game state
+    let playing = false;
+    let paused = false;
+    let speed = 6;
+    let score = 0;
+    let highscore = Number(localStorage.getItem('gd_highscore') || 0);
+    document.getElementById('highscore').textContent = highscore;
+
+    // Player
+    const player = {
+      x: 140,
+      y: 0,
+      size: 40,
+      vy: 0,
+      onGround: false,
+      jumpBuffer: 0,
+      jumpHoldTime: 0
+n    };
+
+    // physics
+    const gravity = 0.8;
+    const jumpSpeed = -15;      // base jump impulse
+    const maxJumpHold = 18;    // frames of added upward force while holding
+    const coyoteTimeFrames = 6; // allow jump a few frames after leaving ground
+    let coyoteTimer = 0;
+
+    // obstacles
+    let obstacles = [];
+    let obstacleTimer = 0;
+    let spawnInterval = 90; // frames
+
+    // background parallax layers
+    const layers = [
+      { speed: 0.2, stars: createStars(60,0.6) },
+      { speed: 0.5, stars: createStars(40,0.8) },
+      { speed: 1.0, stars: createStars(20,1.1) }
+    ];
+
+    // particles
+    const particles = [];
+
+    // audio
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    let muted = false;
+
+    function playBeep(freq, time=0.06, type='sine'){
+      if(muted) return;
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.12, audioCtx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + time);
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(); o.stop(audioCtx.currentTime + time + 0.02);
+    }
+
+    // utilities
+    function rand(min,max){return Math.random()*(max-min)+min}
+
+    // create starfield
+    function createStars(n, scale){
+      const arr = [];
+      for(let i=0;i<n;i++) arr.push({x:Math.random(), y:Math.random(), s:Math.random()*scale+0.2});
+      return arr;
+    }
+
+    // resizing helper to map logical -> screen coords
+    function sx(x){return x * (canvas.width/1024)}
+    function sy(y){return y * (canvas.height/520)}
+
+    // spawn obstacle with variety
+    function spawnObstacle(){
+      const h = Math.floor(rand(40,120));
+      const gap = Math.floor(rand(140, 260) - Math.min(100, score/40));
+      const y = canvas.height - sy(60) - h; // ground-based
+      obstacles.push({x: canvas.width + 80, y: y, w: sx(rand(28,48)), h: h, passed:false});
+    }
+
+    // create particle
+    function emit(x,y, count=8){
+      for(let i=0;i<count;i++) particles.push({x,y,vx:rand(-3,3),vy:rand(-6,-1),life:rand(30,70),r:rand(1,3)});
+    }
+
+    // ground height in screen coords
+    function groundY(){return canvas.height - sy(90)}
+
+    // collision AABB
+    function collide(a,b){
+      return a.x < b.x + b.w && a.x + a.size > b.x && a.y < b.y + b.h && a.y + a.size > b.y;
+    }
+
+    // input
+    const keys = {};
+    window.addEventListener('keydown', e=>{
+      if(e.code==='Space' || e.code==='ArrowUp'){
+        keys.jump = true; e.preventDefault();
+        // small audio context resume for browsers
+        if(audioCtx.state==='suspended') audioCtx.resume();
+      }
+      if(e.code==='KeyP') togglePause();
+      if(e.code==='KeyM') toggleMute();
+    });
+    window.addEventListener('keyup', e=>{ if(e.code==='Space' || e.code==='ArrowUp') keys.jump=false; });
+
+    // Mobile touch
+    document.getElementById('touch-jump').addEventListener('touchstart', e=>{ keys.jump=true; e.preventDefault(); if(audioCtx.state==='suspended') audioCtx.resume(); });
+    document.getElementById('touch-jump').addEventListener('touchend', e=>{ keys.jump=false; e.preventDefault(); });
+
+    // controls
+    document.getElementById('startBtn').addEventListener('click', ()=>{ if(!playing) start(); });
+    document.getElementById('restartBtn').addEventListener('click', ()=>{ restart(); });
+    document.getElementById('pauseBtn').addEventListener('click', ()=>{ togglePause(); });
+    document.getElementById('muteBtn').addEventListener('click', ()=>{ toggleMute(); });
+
+    function toggleMute(){ muted = !muted; document.getElementById('muteBtn').textContent = muted ? 'Unmute' : 'Mute'; }
+    function togglePause(){ if(!playing) return; paused = !paused; document.getElementById('pauseBtn').textContent = paused ? 'Resume' : 'Pause'; }
+
+    function start(){ playing = true; paused = false; score = 0; obstacles = []; obstacleTimer = 0; speed = 6; document.getElementById('startBtn').disabled = true; }
+    function restart(){ playing = true; paused = false; score = 0; obstacles=[]; obstacleTimer=0; speed=6; player.y = groundY() - player.size; player.vy = 0; coyoteTimer=0; document.getElementById('pauseBtn').textContent='Pause'; }
+
+    // init player on ground
+    player.y = groundY() - player.size;
+
+    // game loop
+    let last = performance.now();
+    function loop(now){
+      const dt = Math.min(40, now - last); // ms
+      last = now;
+      if(!paused && playing) update();
+      render();
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+    function update(){
+      // increase difficulty gradually
+      speed += 0.0006;
+      document.getElementById('speed').textContent = Math.round(speed);
+
+      // spawn obstacles
+      obstacleTimer++;
+      if(obstacleTimer > spawnInterval){
+        spawnObstacle();
+        obstacleTimer = 0;
+        // slowly tighten interval
+        if(spawnInterval > 50 && Math.random() < 0.3) spawnInterval -= 1;
+      }
+
+      // physics: apply gravity
+      player.vy += gravity * 0.9;
+      player.y += player.vy;
+
+      // ground collision
+      const gY = groundY();
+      if(player.y + player.size >= gY){
+        if(!player.onGround){
+          player.onGround = true; coyoteTimer = coyoteTimeFrames; player.vy = 0; player.y = gY - player.size;
+        }
+      } else {
+        if(coyoteTimer>0) coyoteTimer--; player.onGround = false;
+      }
+
+      // jump logic: input buffering + variable jump (hold)
+      if(keys.jump){
+        if((player.onGround || coyoteTimer>0) && player.jumpHoldTime===0){
+          // initial jump
+          player.vy = jumpSpeed;
+          player.jumpHoldTime = 1;
+          playBeep(520,0.08,'sine');
+        } else if(player.jumpHoldTime>0 && player.jumpHoldTime < maxJumpHold){
+          // sustain
+          player.vy += -0.9;
+          player.jumpHoldTime++;
+        }
+      } else {
+        player.jumpHoldTime = 0; // release
+      }
+
+      // Move obstacles and check collision
+      for(let i=obstacles.length-1;i>=0;i--){
+        const o = obstacles[i];
+        o.x -= speed * (canvas.width/1024);
+        if(!o.passed && o.x + o.w < player.x){ o.passed = true; score += 10; document.getElementById('score').textContent = score; playBeep(880,0.04,'square'); }
+        if(collide(player, o)){
+          // death
+          emit(player.x + player.size/2, player.y + player.size/2, 20);
+          playBeep(120,0.5,'sawtooth');
+          playing = false;
+          document.getElementById('startBtn').disabled = false;
+          // update highscore
+          if(score > highscore){ highscore = score; localStorage.setItem('gd_highscore', highscore); document.getElementById('highscore').textContent = highscore; }
+        }
+        if(o.x + o.w < -200) obstacles.splice(i,1);
+      }
+
+      // particles update
+      for(let i=particles.length-1;i>=0;i--){
+        const p = particles[i]; p.x += p.vx; p.y += p.vy; p.vy += 0.25; p.life--;
+        if(p.life<=0) particles.splice(i,1);
+      }
+
+      // progress score continuously (distance)
+      score += Math.floor(speed * 0.02);
+      document.getElementById('score').textContent = score;
+    }
+
+    function render(){
+      // clear
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      // draw parallax background
+      ctx.save();
+      ctx.fillStyle = '#071021';
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      layers.forEach((layer, idx)=>{
+        layer.offset = (layer.offset || 0) - layer.speed * (speed/6) * 0.8;
+        layer.offset %= canvas.width;
+        ctx.globalAlpha = 0.6 - idx*0.15;
+        layer.stars.forEach(s => {
+          const x = ((s.x * canvas.width) + layer.offset + canvas.width) % canvas.width;
+          ctx.beginPath(); ctx.arc(x, s.y*canvas.height*0.6 + idx*60 + 40, s.s * (idx+0.8), 0, Math.PI*2); ctx.fillStyle = 'rgba(180,220,255,0.08)'; ctx.fill();
+        });
+      });
+      ctx.globalAlpha = 1; ctx.restore();
+
+      // ground
+      ctx.fillStyle = '#0b1b26';
+      ctx.fillRect(0, groundY(), canvas.width, canvas.height - groundY());
+
+      // draw obstacles
+      ctx.save();
+      ctx.fillStyle = '#ff6b6b';
+      obstacles.forEach(o=>{
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+        // top highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.fillRect(o.x, o.y, o.w, 6);
+        ctx.fillStyle = '#ff6b6b';
+      });
+      ctx.restore();
+
+      // draw player (rounded square)
+      ctx.save();
+      const px = player.x, py = player.y, ps = player.size;
+      // shadow
+      ctx.beginPath(); ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.ellipse(px+ps*0.5, groundY()+8, ps*0.6, 8, 0, 0, Math.PI*2); ctx.fill();
+      // body
+      ctx.fillStyle = '#06f0d8';
+      roundRect(ctx, px, py, ps, ps, 6); ctx.fill();
+      // eye/panel
+      ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(px+ps*0.18, py+ps*0.2, ps*0.64, ps*0.18);
+      ctx.restore();
+
+      // particles
+      particles.forEach(p=>{ ctx.globalAlpha = Math.max(0, p.life/90); ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fillStyle='rgba(255,200,160,0.9)'; ctx.fill(); ctx.globalAlpha=1; });
+
+      // UI overlays
+      ctx.save(); ctx.fillStyle='rgba(255,255,255,0.03)'; ctx.fillRect(12,12,220,46); ctx.restore();
+
+      // paused overlay
+      if(paused){ ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.font='28px system-ui'; ctx.fillText('Paused', canvas.width/2, canvas.height/2); }
+
+      // game over overlay
+      if(!playing){ ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(0,0,canvas.width,canvas.height); ctx.fillStyle='#fff'; ctx.textAlign='center'; ctx.font='26px system-ui'; ctx.fillText('Press Start to play again', canvas.width/2, canvas.height/2 + 10); }
+    }
+
+    // helper: rounded rectangle
+    function roundRect(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+    // expose some quick controls via console for power users
+    window.GD = { restart, start, toggleMute, togglePause, spawnObstacle };
+
+    // init small autonomous demo start
+    (function autoStartDemo(){
+      // on load show start button enabled. optional: auto start on desktop
+      if(window.innerWidth > 900){ /* do not auto-start */ }
+    })();
+
+  </script>
+</body>
+</html>
