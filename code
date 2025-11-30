@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Geometry Dash Clone</title>
+  <style>
+    body { margin: 0; background: #111; overflow: hidden; }
+    canvas { display: block; margin: 0 auto; background: #222; }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="800" height="400"></canvas>
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    let player = { x: 50, y: 300, size: 30, vy: 0, jumping: false };
+    let gravity = 0.6;
+    let jumpPower = -12;
+
+    let obstacles = [];
+    let speed = 6;
+
+    function spawnObstacle() {
+      obstacles.push({ x: canvas.width, y: 330, width: 30, height: 70 });
+    }
+
+    setInterval(spawnObstacle, 1500);
+
+    function update() {
+      player.vy += gravity;
+      player.y += player.vy;
+
+      if (player.y > 300) {
+        player.y = 300;
+        player.vy = 0;
+        player.jumping = false;
+      }
+
+      obstacles.forEach(obs => obs.x -= speed);
+      obstacles = obstacles.filter(obs => obs.x + obs.width > 0);
+
+      obstacles.forEach(obs => {
+        if (
+          player.x < obs.x + obs.width &&
+          player.x + player.size > obs.x &&
+          player.y < obs.y + obs.height &&
+          player.y + player.size > obs.y
+        ) {
+          alert('Game Over!');
+          document.location.reload();
+        }
+      });
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#0ff';
+      ctx.fillRect(player.x, player.y, player.size, player.size);
+
+      ctx.fillStyle = '#f33';
+      obstacles.forEach(obs => ctx.fillRect(obs.x, obs.y, obs.width, obs.height));
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('keydown', e => {
+      if (e.code === 'Space' && !player.jumping) {
+        player.vy = jumpPower;
+        player.jumping = true;
+      }
+    });
+
+    loop();
+  </script>
+</body>
+</html>
+
